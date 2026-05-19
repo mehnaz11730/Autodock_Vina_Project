@@ -1,0 +1,171 @@
+---
+title: "Calculate distance between AutoDock Vina ligand distance and crystal structure"
+author: "Mehnaz Meem"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    fig_width: 5
+    fig_height: 5
+theme: cosmo
+---
+
+Source: TBA
+
+## Introduction
+
+```{r,libs}
+
+message("todo")
+
+```
+
+## Crystal structure position
+
+```{r,crystal}
+
+cx = 10.422
+cy = -16.270
+cz = 12.404
+
+```
+
+## Read data
+
+```{r,read_autodock_data}
+
+pdb <- readLines("docking8.pdbqt")
+hetatm <- pdb[grep("HETATM",pdb)]
+hetatm <- strsplit(hetatm," ")
+hetatm[[1]][which(hetatm[[1]]!="")]
+hetatm <- lapply(hetatm,function(x) { x[which(x!="")]  } )
+hetatm_df <- do.call(rbind.data.frame, hetatm)
+colnames(hetatm_df) <- paste("col",1:12)
+
+```
+
+Extract numerical coordinates (col6-8).
+Data converted to numerical matrix
+
+```{r,extract_coords}
+
+mx <- apply(hetatm_df[,6:8],2,as.numeric)
+
+str(mx)
+summary(mx)
+
+```
+
+## Define ligand box
+
+```{r,lig_box}
+
+min_x <- min(mx[,1])
+max_x <- max(mx[,1])
+min_y <- min(mx[,2])
+max_y <- max(mx[,2])
+min_z <- min(mx[,3])
+max_z <- max(mx[,3])
+
+```
+
+Prediction ligand position.
+
+```{r,pred}
+
+px <- ( min_x + max_x ) / 2
+py <- ( min_y + max_y ) / 2
+pz <- ( min_z + max_z ) / 2
+```
+
+## Calc diff
+
+```{r,diff}
+
+dx <- abs(cx - px)
+dy <- abs(cy - py)
+dz <- abs(cz - pz)
+
+```
+
+## 3d hypotenuse
+
+```{r,hypot}
+
+hyp <- sqrt(dx^2 + dy^2 + dz^2)
+
+```
+
+## Define a function
+
+```{r,dist_function}
+
+cxyz <- c(10.422,-16.270,12.404)
+
+model_ligand_dist <- function(cxyz,pdbqt_file) {
+pdb <- readLines(pdbqt_file)
+hetatm <- pdb[grep("HETATM",pdb)]
+hetatm <- strsplit(hetatm," ")
+hetatm[[1]][which(hetatm[[1]]!="")]
+hetatm <- lapply(hetatm,function(x) { x[which(x!="")]  } )
+hetatm_df <- do.call(rbind.data.frame, hetatm)
+colnames(hetatm_df) <- paste("col",1:12)
+mx <- apply(hetatm_df[,6:8],2,as.numeric)
+min_x <- min(mx[,1])
+max_x <- max(mx[,1])
+min_y <- min(mx[,2])
+max_y <- max(mx[,2])
+min_z <- min(mx[,3])
+max_z <- max(mx[,3])
+px <- ( min_x + max_x ) / 2
+py <- ( min_y + max_y ) / 2
+pz <- ( min_z + max_z ) / 2
+cx = cxyz[1]
+cy = cxyz[2]
+cz = cxyz[3]
+dx <- abs(cx - px)
+dy <- abs(cy - py)
+dz <- abs(cz - pz)
+hyp <- sqrt(dx^2 + dy^2 + dz^2)
+return(hyp)
+}
+
+```
+
+Test the function.
+
+```{r,functest}
+
+model_ligand_dist(cxyz,"docking8.pdbqt")
+
+```
+
+Run for all pdbqt files
+
+```{r,runall}
+
+myfiles <- list.files(".",pattern="pdbqt")
+myfiles <- myfiles[grep("docking",myfiles)]
+
+distance <- unlist(lapply(myfiles, function(f) {
+  model_ligand_dist(cxyz,f)
+} ) )
+
+names(distance) <- myfiles
+barplot(distance)
+distance
+
+```
+
+## Session info
+
+For reproducibility.
+
+```{r,session}
+
+sessionInfo()
+
+```
+
