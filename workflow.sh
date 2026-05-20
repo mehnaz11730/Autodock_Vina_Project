@@ -20,25 +20,25 @@ grep -v HOH 1DQ8.pdb1 > 1DQ8_clean.pdb
 
 
 ## Prep ligand
-obabel Conformer3D_COMPOUND_CID_446156.sdf -O Conformer3D_COMPOUND_CID_446156.sdf.pdb --gen3d
+obabel Conformer3D_COMPOUND_CID_446156.sdf -O Conformer3D_COMPOUND_CID_446156.pdb --gen3d
 # Preparing the python script from ~/app/mgltools folder
 /home/mehnaz/app/mgltools_x86_64Linux2_1.5.7/bin/pythonsh \
 /home/mehnaz/app/mgltools_x86_64Linux2_1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py \
--l ligand.pdb \
--o ligand.pdbqt
+-l Conformer3D_COMPOUND_CID_446156.pdb \
+-o Conformer3D_COMPOUND_CID_446156.pdbqt
 
 obabel Conformer3D_COMPOUND_CID_446156.sdf -O ligand.pdb --gen3d && /home/mehnaz/app/mgltools_x86_64Linux2_1.5.7/bin/pythonsh /home/mehnaz/app/mgltools_x86_64Linux2_1.5.7/MGLToolsPckgs/AutoDockTools/Utilities24/prepare_ligand4.py -l ligand.pdb -o ligand.pdbqt
 # run pymol to get the bounds
-conda activate pymol_env
-pymol 1DQ8_clean.pdb
+#conda activate pymol_env
+#pymol 1DQ8_clean.pdb
 
 # run the docking analysis
-vina --config config.txt --out docking.pdbqt --cpu 8
+vina --config config.txt --out statin.pdbqt --cpu 8
 pymol -c -docking 1DQ8_clean_model.pdb Conformer3D_COMPOUND_CID_446156.sdf
-pymol docking.pdbq
+pymol statin.pdbq
 
 #CONVERTED DOCKING_PDBQT_FILE TO_PDB
-obabel docking.pdbqt -O docking.pdb
+obabel statin.pdbqt -O statin.pdb
 
-less docking.pdbqt
+
 
