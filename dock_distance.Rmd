@@ -3,6 +3,8 @@ title: "Calculate distance between AutoDock Vina ligand distance and crystal str
 author: "Mehnaz Meem"
 date: "`r Sys.Date()`"
 output:
+  pdf_document:
+    toc: true
   html_document:
     toc: true
     toc_float: true
