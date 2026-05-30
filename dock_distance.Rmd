@@ -37,6 +37,7 @@ cz = 12.404
 ## Read data
 
 ```{read r, autodock_data}
+
 pdb <- readLines("docking_6_100.pdbqt")
 hetatm <- pdb[grep("HETATM",pdb)]
 hetatm <- strsplit(hetatm," ")
@@ -140,7 +141,7 @@ Test the function.
 
 ```{r,functest}
 
-model_ligand_dist(cxyz,"docking8.pdbqt")
+model_ligand_dist(cxyz,"docking_6_100.pdbqt")
 
 ```
 
@@ -160,6 +161,60 @@ barplot(distance)
 distance
 
 ```
+
+```{bash}
+library(beeswarm)
+
+# Find all docking pdbqt files
+myfiles <- list.files(".", pattern = "^docking_[0-9]+_[0-9]+\\.pdbqt$")
+
+# Calculate distance for all files
+distance <- unlist(lapply(myfiles, function(f) {
+  model_ligand_dist(cxyz, f)
+}))
+
+names(distance) <- myfiles
+
+# Create data frame
+df <- data.frame(
+  file = names(distance),
+  distance = as.numeric(distance),
+  stringsAsFactors = FALSE
+)
+
+# Extract exhaustiveness value
+df$exhaustiveness <- sub("^docking_([0-9]+)_.*", "\\1", df$file)
+
+# Order exhaustiveness values
+df$exhaustiveness <- factor(
+  df$exhaustiveness,
+  levels = c("6","8","10","12","14","16","18","20")
+)
+
+# Split distances by exhaustiveness
+dist_list <- split(df$distance, df$exhaustiveness)
+
+# Boxplot
+boxplot(
+  dist_list,
+  xlab = "Exhaustiveness",
+  ylab = "Docking Distance (Å)",
+  main = "Docking Distance by Exhaustiveness",
+  col = "white",
+  border = "black"
+)
+
+# Add beeswarm points
+beeswarm(
+  dist_list,
+  add = TRUE,
+  pch = 19,
+  cex = 1.2,
+  col = "darkgray"
+)
+```
+
+
 
 ## Session info
 
