@@ -3,14 +3,14 @@ title: "Calculate distance between AutoDock Vina ligand distance and crystal str
 author: "Mehnaz Meem"
 date: "`r Sys.Date()`"
 output:
-  pdf_document:
-    toc: true
   html_document:
     toc: true
     toc_float: true
     code_folding: hide
     fig_width: 5
     fig_height: 5
+  pdf_document:
+    toc: true
 theme: cosmo
 ---
 
@@ -36,17 +36,17 @@ cz = 12.404
 
 ## Read data
 
-```{r,read_autodock_data}
-
-pdb <- readLines("docking8.pdbqt")
+```{read r, autodock_data}
+pdb <- readLines("docking_6_100.pdbqt")
 hetatm <- pdb[grep("HETATM",pdb)]
 hetatm <- strsplit(hetatm," ")
 hetatm[[1]][which(hetatm[[1]]!="")]
 hetatm <- lapply(hetatm,function(x) { x[which(x!="")]  } )
 hetatm_df <- do.call(rbind.data.frame, hetatm)
 colnames(hetatm_df) <- paste("col",1:12)
-
 ```
+
+
 
 Extract numerical coordinates (col6-8).
 Data converted to numerical matrix

@@ -6,3 +6,4 @@ for EX in 6 8 10 12 14 16 18 20 ; do
     vina --exhaustiveness $EX --seed $SEED --config config.txt --out $OUTNAME --cpu 8
   done
 done
+
