@@ -36,9 +36,9 @@ cz = 12.404
 
 ## Read data
 
-```{read r, autodock_data}
+```{r,autodock_data}
 
-pdb <- readLines("docking_6_100.pdbqt")
+pdb <- readLines("~/autodock_vina_workflow/docking_6_100.pdbqt")
 hetatm <- pdb[grep("HETATM",pdb)]
 hetatm <- strsplit(hetatm," ")
 hetatm[[1]][which(hetatm[[1]]!="")]
@@ -141,77 +141,110 @@ Test the function.
 
 ```{r,functest}
 
-model_ligand_dist(cxyz,"docking_6_100.pdbqt")
+model_ligand_dist(cxyz,"~/autodock_vina_workflow/docking_6_100.pdbqt")
 
 ```
 
 Run for all pdbqt files
 
-```{r,runall}
+```{r runall, fig.width=10, fig.height=6}
 
-myfiles <- list.files(".",pattern="pdbqt")
-myfiles <- myfiles[grep("docking",myfiles)]
+# All docking output files in the correct folder
+myfiles <- list.files(
+  path = "~/autodock_vina_workflow",
+  pattern = "^docking_[0-9]+_[0-9]+\\.pdbqt$",
+  full.names = TRUE
+)
 
-distance <- unlist(lapply(myfiles, function(f) {
-  model_ligand_dist(cxyz,f)
-} ) )
+# Stop with a clear message if files are not found
+if (length(myfiles) == 0) {
+  stop("No docking files found in ~/autodock_vina_workflow")
+}
 
-names(distance) <- myfiles
-barplot(distance)
+# Calculate distance for every docking file
+distance <- vapply(
+  myfiles,
+  function(f) model_ligand_dist(cxyz, f),
+  numeric(1)
+)
+
+# Use short file names as bar labels
+names(distance) <- basename(myfiles)
+
+# Print calculated distances
 distance
+
+# Create barplot
+barplot(
+  height = distance,
+  names.arg = names(distance),
+  las = 2,
+  cex.names = 0.5,
+  ylab = "Docking distance (Å)",
+  xlab = "Docking output file",
+  main = "Docking Distance for All Docking Runs"
+)
 
 ```
 
-```{bash}
-library(beeswarm)
 
-# Find all docking pdbqt files
-myfiles <- list.files(".", pattern = "^docking_[0-9]+_[0-9]+\\.pdbqt$")
+```{r beeswarm_boxplot, fig.width=8, fig.height=6}
 
-# Calculate distance for all files
-distance <- unlist(lapply(myfiles, function(f) {
-  model_ligand_dist(cxyz, f)
-}))
+# Check that the beeswarm package is available
+if (!requireNamespace("beeswarm", quietly = TRUE)) {
+  stop("Install the beeswarm package first by running: install.packages('beeswarm')")
+}
 
-names(distance) <- myfiles
-
-# Create data frame
-df <- data.frame(
+# Create a data frame from the calculated docking distances
+plot_df <- data.frame(
   file = names(distance),
   distance = as.numeric(distance),
   stringsAsFactors = FALSE
 )
 
-# Extract exhaustiveness value
-df$exhaustiveness <- sub("^docking_([0-9]+)_.*", "\\1", df$file)
-
-# Order exhaustiveness values
-df$exhaustiveness <- factor(
-  df$exhaustiveness,
-  levels = c("6","8","10","12","14","16","18","20")
+# Extract exhaustiveness values from file names
+# Example: docking_6_100.pdbqt becomes 6
+plot_df$exhaustiveness <- sub(
+  "^docking_([0-9]+)_.*$",
+  "\\1",
+  plot_df$file
 )
 
-# Split distances by exhaustiveness
-dist_list <- split(df$distance, df$exhaustiveness)
+# Arrange exhaustiveness values in numerical order
+exhaustiveness_order <- sort(unique(as.numeric(plot_df$exhaustiveness)))
 
-# Boxplot
+plot_df$exhaustiveness <- factor(
+  plot_df$exhaustiveness,
+  levels = exhaustiveness_order
+)
+
+# Group the 10 distance values for each exhaustiveness value
+dist_list <- split(
+  plot_df$distance,
+  plot_df$exhaustiveness,
+  drop = TRUE
+)
+
+# Make boxplot
 boxplot(
   dist_list,
   xlab = "Exhaustiveness",
-  ylab = "Docking Distance (Å)",
-  main = "Docking Distance by Exhaustiveness",
+  ylab = "Docking distance (Å)",
+  main = "Variation in Docking Distance by Exhaustiveness",
   col = "white",
   border = "black"
 )
 
-# Add beeswarm points
-beeswarm(
+# Add individual docking-distance values as beeswarm points
+beeswarm::beeswarm(
   dist_list,
   add = TRUE,
   pch = 19,
   cex = 1.2,
   col = "darkgray"
 )
+
+```
 ```
 
 
