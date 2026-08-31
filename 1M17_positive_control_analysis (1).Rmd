@@ -1,0 +1,605 @@
+---
+title: "1M17 Positive-Control Docking Analysis"
+author: "Mehnaz Hossain Meem"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: cosmo
+    fig_width: 8
+    fig_height: 6
+  pdf_document:
+    toc: true
+    fig_width: 8
+    fig_height: 6
+---
+
+## Analysis aim
+
+This analysis evaluates positive-control redocking of crystallographic
+erlotinib (AQ4) into the 1M17 EGFR structure. Only the top-ranked AutoDock
+Vina pose (`MODEL 1`) is analysed from each output. Docking distance is the
+Euclidean distance between the centre of the docked ligand and the
+crystallographic erlotinib centre.
+
+Expected filenames follow this pattern:
+
+```text
+prep_1M17_10_200.pdbqt
+prep_1M17_10_400.pdbqt
+...
+prep_1M17_100_10000.pdbqt
+```
+
+## Load packages
+
+```{r setup, message=FALSE, warning=FALSE}
+required_packages <- c("ggplot2", "dplyr", "knitr")
+
+missing_packages <- required_packages[
+  !vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Install these packages before knitting: ",
+    paste(missing_packages, collapse = ", ")
+  )
+}
+
+library(ggplot2)
+library(dplyr)
+library(knitr)
+
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Analysis settings
+
+```{r settings}
+data_dir <- "/mnt/data/mehnaz/1M17_Crys_Docking"
+
+expected_box_sizes <- c(
+  10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100
+)
+
+crystal_center <- c(
+  x = 21.6975,
+  y = 0.3030,
+  z = 52.0925
+)
+
+file_pattern <- paste0(
+  "^prep_1M17_(",
+  paste(expected_box_sizes, collapse = "|"),
+  ")_[0-9]+\\.pdbqt$"
+)
+
+box_colours <- c(
+  "10" = "purple",
+  "15" = "red",
+  "20" = "blue",
+  "25" = "darkgreen",
+  "30" = "orange",
+  "40" = "brown",
+  "50" = "deeppink",
+  "60" = "cyan4",
+  "70" = "black",
+  "80" = "goldenrod3",
+  "90" = "steelblue",
+  "100" = "magenta4"
+)
+```
+
+## Crystallographic ligand centre
+
+```{r crystal-centre-table}
+crystal_center_table <- data.frame(
+  coordinate = c("x", "y", "z"),
+  value = unname(crystal_center)
+)
+
+kable(
+  crystal_center_table,
+  digits = 4,
+  caption = "Crystallographic erlotinib centre used for distance calculation"
+)
+```
+
+## Functions
+
+### Read MODEL 1
+
+```{r model-one-function}
+read_model_1 <- function(pdbqt_file) {
+  lines <- readLines(pdbqt_file, warn = FALSE)
+
+  model_start <- grep(
+    "^MODEL[[:space:]]+1[[:space:]]*$",
+    lines
+  )[1]
+
+  if (is.na(model_start)) {
+    return(lines)
+  }
+
+  model_end <- which(
+    seq_along(lines) > model_start & grepl("^ENDMDL", lines)
+  )[1]
+
+  if (is.na(model_end)) {
+    stop("MODEL 1 has no ENDMDL in: ", pdbqt_file)
+  }
+
+  lines[model_start:model_end]
+}
+```
+
+### Calculate the docked-ligand centre
+
+The ligand centre is calculated using the midpoint between the minimum and
+maximum coordinate on each axis, matching the method used to calculate the
+crystallographic erlotinib centre.
+
+```{r ligand-centre-function}
+calculate_ligand_center <- function(model_lines) {
+  atom_lines <- model_lines[
+    grepl("^(ATOM|HETATM)", model_lines)
+  ]
+
+  if (length(atom_lines) == 0) {
+    return(c(x = NA_real_, y = NA_real_, z = NA_real_))
+  }
+
+  x <- suppressWarnings(as.numeric(substr(atom_lines, 31, 38)))
+  y <- suppressWarnings(as.numeric(substr(atom_lines, 39, 46)))
+  z <- suppressWarnings(as.numeric(substr(atom_lines, 47, 54)))
+
+  valid <- is.finite(x) & is.finite(y) & is.finite(z)
+  x <- x[valid]
+  y <- y[valid]
+  z <- z[valid]
+
+  if (length(x) == 0) {
+    return(c(x = NA_real_, y = NA_real_, z = NA_real_))
+  }
+
+  c(
+    x = mean(range(x)),
+    y = mean(range(y)),
+    z = mean(range(z))
+  )
+}
+```
+
+### Extract the MODEL 1 Vina score
+
+```{r vina-score-function}
+extract_vina_score <- function(model_lines, pdbqt_file) {
+  score_line <- grep(
+    "^REMARK VINA RESULT:",
+    model_lines,
+    value = TRUE
+  )
+
+  if (length(score_line) == 0) {
+    all_lines <- readLines(pdbqt_file, warn = FALSE)
+    score_line <- grep(
+      "^REMARK VINA RESULT:",
+      all_lines,
+      value = TRUE
+    )
+  }
+
+  if (length(score_line) == 0) {
+    return(NA_real_)
+  }
+
+  suppressWarnings(
+    as.numeric(
+      sub(
+        "^REMARK VINA RESULT:[[:space:]]*([-+]?[0-9]*\\.?[0-9]+).*$",
+        "\\1",
+        score_line[1]
+      )
+    )
+  )
+}
+```
+
+### Analyse one docking output
+
+```{r analyse-one-file}
+analyse_docking_file <- function(pdbqt_file) {
+  filename <- basename(pdbqt_file)
+
+  filename_match <- regexec(
+    "^prep_1M17_([0-9]+)_([0-9]+)\\.pdbqt$",
+    filename
+  )
+
+  values <- regmatches(filename, filename_match)[[1]]
+
+  if (length(values) != 3) {
+    stop("Unexpected docking filename: ", filename)
+  }
+
+  model_lines <- read_model_1(pdbqt_file)
+  ligand_center <- calculate_ligand_center(model_lines)
+  docking_score <- extract_vina_score(model_lines, pdbqt_file)
+
+  if (any(!is.finite(ligand_center))) {
+    distance_A <- NA_real_
+  } else {
+    distance_A <- sqrt(sum((ligand_center - crystal_center)^2))
+  }
+
+  data.frame(
+    file = filename,
+    box_size = as.numeric(values[2]),
+    seed = as.numeric(values[3]),
+    docking_score = docking_score,
+    distance_A = distance_A,
+    ligand_center_x = unname(ligand_center["x"]),
+    ligand_center_y = unname(ligand_center["y"]),
+    ligand_center_z = unname(ligand_center["z"]),
+    stringsAsFactors = FALSE
+  )
+}
+```
+
+## Find docking files
+
+```{r find-files}
+docking_files <- list.files(
+  path = data_dir,
+  pattern = file_pattern,
+  full.names = TRUE
+)
+
+if (length(docking_files) == 0) {
+  stop(
+    "No matching 1M17 docking files were found in: ",
+    data_dir
+  )
+}
+
+cat("Number of docking files found:", length(docking_files), "\n")
+```
+
+## Check seed-run counts
+
+```{r file-counts}
+file_information <- data.frame(
+  file = basename(docking_files),
+  stringsAsFactors = FALSE
+)
+
+file_information$box_size <- as.numeric(
+  sub(
+    "^prep_1M17_([0-9]+)_[0-9]+\\.pdbqt$",
+    "\\1",
+    file_information$file
+  )
+)
+
+file_information$seed <- as.numeric(
+  sub(
+    "^prep_1M17_[0-9]+_([0-9]+)\\.pdbqt$",
+    "\\1",
+    file_information$file
+  )
+)
+
+file_counts <- file_information |>
+  group_by(box_size) |>
+  summarise(
+    number_of_files = n(),
+    minimum_seed = min(seed),
+    maximum_seed = max(seed),
+    .groups = "drop"
+  ) |>
+  arrange(box_size)
+
+kable(
+  file_counts,
+  caption = "Number of 1M17 docking files found for each box size"
+)
+```
+
+## Analyse all outputs
+
+```{r analyse-all-files}
+results <- bind_rows(
+  lapply(docking_files, analyse_docking_file)
+) |>
+  arrange(box_size, seed)
+
+failed_rows <- results |>
+  filter(!is.finite(docking_score) | !is.finite(distance_A))
+
+valid_results <- results |>
+  filter(is.finite(docking_score), is.finite(distance_A)) |>
+  mutate(
+    box = factor(
+      box_size,
+      levels = expected_box_sizes
+    )
+  )
+
+if (nrow(valid_results) == 0) {
+  stop("No valid docking scores and distances were extracted.")
+}
+
+cat("Valid docking files analysed:", nrow(valid_results), "\n")
+cat("Files with missing values:", nrow(failed_rows), "\n")
+```
+
+## Files that could not be parsed
+
+```{r failed-files}
+if (nrow(failed_rows) == 0) {
+  cat("All docking files were parsed successfully.")
+} else {
+  kable(
+    failed_rows,
+    digits = 4,
+    caption = "Files with missing docking-score or coordinate data"
+  )
+}
+```
+
+## Summary by grid-box size
+
+```{r summary-by-box}
+box_summary <- valid_results |>
+  group_by(box_size) |>
+  summarise(
+    number_of_runs = n(),
+    mean_score = mean(docking_score),
+    median_score = median(docking_score),
+    best_score = min(docking_score),
+    mean_distance_A = mean(distance_A),
+    median_distance_A = median(distance_A),
+    closest_distance_A = min(distance_A),
+    .groups = "drop"
+  ) |>
+  arrange(box_size)
+
+kable(
+  box_summary,
+  digits = 4,
+  caption = "1M17 positive-control summary by grid-box size"
+)
+```
+
+## Best-affinity MODEL 1 result from each box
+
+The most-negative Vina score is selected from each box size.
+
+```{r best-affinity-results}
+best_affinity_results <- valid_results |>
+  group_by(box_size) |>
+  slice_min(
+    order_by = docking_score,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  arrange(box_size)
+
+kable(
+  best_affinity_results |>
+    select(box_size, seed, docking_score, distance_A, file),
+  digits = 5,
+  caption = "Best-affinity MODEL 1 result from each 1M17 grid box"
+)
+```
+
+## Closest MODEL 1 result from each box
+
+```{r closest-results}
+closest_results <- valid_results |>
+  group_by(box_size) |>
+  slice_min(
+    order_by = distance_A,
+    n = 1,
+    with_ties = FALSE
+  ) |>
+  ungroup() |>
+  arrange(box_size)
+
+kable(
+  closest_results |>
+    select(box_size, seed, distance_A, docking_score, file),
+  digits = 5,
+  caption = "Closest MODEL 1 erlotinib pose from each 1M17 grid box"
+)
+```
+
+## Boxplot: docking distance by grid-box size
+
+```{r distance-boxplot, fig.width=9, fig.height=6}
+distance_boxplot <- ggplot(
+  valid_results,
+  aes(x = box, y = distance_A)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    fill = "white",
+    colour = "black"
+  ) +
+  geom_jitter(
+    width = 0.18,
+    alpha = 0.50,
+    size = 1.4,
+    colour = "darkgray"
+  ) +
+  geom_point(
+    data = best_affinity_results,
+    aes(
+      x = factor(box_size, levels = expected_box_sizes),
+      y = distance_A,
+      fill = factor(box_size)
+    ),
+    inherit.aes = FALSE,
+    shape = 21,
+    size = 4,
+    stroke = 0.8,
+    colour = "black"
+  ) +
+  scale_fill_manual(values = box_colours, guide = "none") +
+  labs(
+    title = "1M17 Docking Distance by Grid Box Size",
+    subtitle = "Positive control; exhaustiveness = 12",
+    x = "Grid box size (Å)",
+    y = "Docking distance (Å)"
+  ) +
+  theme_classic(base_size = 12)
+
+distance_boxplot
+```
+
+## Boxplot: Vina score by grid-box size
+
+```{r score-boxplot, fig.width=9, fig.height=6}
+score_boxplot <- ggplot(
+  valid_results,
+  aes(x = box, y = docking_score)
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    fill = "white",
+    colour = "black"
+  ) +
+  geom_jitter(
+    width = 0.18,
+    alpha = 0.50,
+    size = 1.4,
+    colour = "darkgray"
+  ) +
+  labs(
+    title = "1M17 Vina Scores by Grid Box Size",
+    subtitle = "Positive control; exhaustiveness = 12",
+    x = "Grid box size (Å)",
+    y = "Vina docking score (kcal/mol)"
+  ) +
+  theme_classic(base_size = 12)
+
+score_boxplot
+```
+
+## Scatterplot: best affinity versus distance
+
+Each point is the most-negative `MODEL 1` Vina score selected from one box.
+
+```{r scatter-plot, fig.width=9, fig.height=6}
+scatter_df <- best_affinity_results |>
+  mutate(
+    box = factor(
+      box_size,
+      levels = expected_box_sizes
+    )
+  )
+
+scatter_plot <- ggplot(
+  scatter_df,
+  aes(
+    x = distance_A,
+    y = docking_score,
+    colour = box,
+    label = paste0(box_size, " Å")
+  )
+) +
+  geom_point(size = 4) +
+  geom_text(
+    nudge_y = 0.08,
+    show.legend = FALSE,
+    check_overlap = TRUE
+  ) +
+  scale_colour_manual(values = box_colours, drop = TRUE) +
+  labs(
+    title = "1M17 Best Binding Affinity for Each Grid Box",
+    subtitle = "Positive-control erlotinib redocking",
+    x = "Docking distance (Å)",
+    y = "Best Vina binding affinity (kcal/mol)",
+    colour = "Grid box size"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(legend.position = "right")
+
+scatter_plot
+```
+
+## Save results and plots
+
+```{r save-results}
+write.csv(
+  valid_results,
+  file.path(data_dir, "1M17_positive_control_results.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  box_summary,
+  file.path(data_dir, "1M17_positive_control_box_summary.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  best_affinity_results,
+  file.path(data_dir, "1M17_positive_control_best_affinity.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  closest_results,
+  file.path(data_dir, "1M17_positive_control_closest_poses.csv"),
+  row.names = FALSE
+)
+
+ggsave(
+  file.path(data_dir, "1M17_positive_control_distance_boxplot.png"),
+  distance_boxplot,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  file.path(data_dir, "1M17_positive_control_score_boxplot.png"),
+  score_boxplot,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+
+ggsave(
+  file.path(data_dir, "1M17_positive_control_score_vs_distance.png"),
+  scatter_plot,
+  width = 9,
+  height = 6,
+  dpi = 300
+)
+```
+
+## Interpretation guide
+
+- A smaller docking distance indicates that the docked erlotinib pose is
+  closer to the crystallographic ligand location.
+- A more-negative Vina score indicates stronger predicted binding.
+- The best-scoring pose and closest pose can come from different seed runs.
+- Results from 10 and 15 Å boxes should be interpreted cautiously because
+  erlotinib spans approximately 15.7 Å along its longest axis.
+
+## Session information
+
+```{r session-info}
+sessionInfo()
+```
