@@ -1,0 +1,392 @@
+---
+title: "Calculate distance between AutoDock Vina ligand distance and crystal structure"
+author: "Mehnaz Meem"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    fig_width: 5
+    fig_height: 5
+theme: cosmo
+---
+
+Source: TBA
+
+## Introduction
+
+```{r,libs}
+
+message("todo")
+
+```
+
+## Crystal structure position
+
+```{r,crystal}
+
+cx = 28.5045
+cy = 6.877
+cz = 59.213
+
+```
+
+## Read data
+
+```{r,autodock_data}
+
+pdb <- readLines("~/Protein_Comparison_workflows/prep_1J3K_5_200.pdbqt")
+hetatm <- pdb[grep("^(ATOM|HETATM)", pdb)]
+hetatm <- strsplit(hetatm," ")
+hetatm[[1]][which(hetatm[[1]]!="")]
+hetatm <- lapply(hetatm,function(x) { x[which(x!="")]  } )
+hetatm_df <- do.call(rbind.data.frame, hetatm)
+colnames(hetatm_df) <- paste("col",1:12)
+```
+
+
+
+Extract numerical coordinates (col6-8).
+Data converted to numerical matrix
+
+```{r,extract_coords}
+
+mx <- apply(hetatm_df[,6:8],2,as.numeric)
+
+str(mx)
+summary(mx)
+
+```
+
+## Define ligand box
+
+```{r,lig_box}
+
+min_x <- min(mx[,1])
+max_x <- max(mx[,1])
+min_y <- min(mx[,2])
+max_y <- max(mx[,2])
+min_z <- min(mx[,3])
+max_z <- max(mx[,3])
+
+```
+
+Prediction ligand position.
+
+```{r,pred}
+
+px <- ( min_x + max_x ) / 2
+py <- ( min_y + max_y ) / 2
+pz <- ( min_z + max_z ) / 2
+```
+
+## Calc diff
+
+```{r,diff}
+
+dx <- abs(cx - px)
+dy <- abs(cy - py)
+dz <- abs(cz - pz)
+
+```
+
+## 3d hypotenuse
+
+```{r,hypot}
+
+hyp <- sqrt(dx^2 + dy^2 + dz^2)
+
+```
+
+## Define a function
+
+```{r,dist_function}
+
+cxyz <- c(28.5045, 6.877, 59.213)
+
+model_ligand_dist <- function(cxyz, pdbqt_file) {
+  pdb <- readLines(pdbqt_file)
+
+  atoms <- pdb[grep("^(ATOM|HETATM)", pdb)]
+
+  if (length(atoms) == 0) {
+    stop(paste("No ATOM or HETATM lines found in:", pdbqt_file))
+  }
+
+x <- as.numeric(substr(atoms, 31, 38))
+y <- as.numeric(substr(atoms, 39, 46))
+z <- as.numeric(substr(atoms, 47, 54))
+
+px <- mean(range(x, na.rm = TRUE))
+py <- mean(range(y, na.rm = TRUE))
+pz <- mean(range(z, na.rm = TRUE))
+
+  dx <- abs(cxyz[1] - px)
+  dy <- abs(cxyz[2] - py)
+  dz <- abs(cxyz[3] - pz)
+
+  hyp <- sqrt(dx^2 + dy^2 + dz^2)
+
+  return(hyp)
+}
+
+```
+
+Test the function.
+
+```{r,functest}
+
+model_ligand_dist(cxyz,"~/Protein_Comparison_workflows/prep_1J3K_5_200.pdbqt")
+
+```
+
+Run for all pdbqt files
+
+```{r runall, fig.width=10, fig.height=6}
+
+# All config docking output files
+myfiles <- list.files(
+  path = "~/Protein_Comparison_workflows",
+  pattern = "^prep_1J3K_(10|15|20|25|30|40|50|60|70)_[0-9]+\\.pdbqt$",
+  full.names = TRUE
+)
+
+# Stop if files are not found
+if (length(myfiles) == 0) {
+  stop("No config docking files found in ~/Protein_Comparison_workflows")
+}
+
+# Calculate distance for every docking file
+distance <- vapply(
+  myfiles,
+  function(f) model_ligand_dist(cxyz, f),
+  numeric(1)
+)
+
+# Use short file names
+names(distance) <- basename(myfiles)
+
+# Create data frame
+plot_df <- data.frame(
+  file = names(distance),
+  distance = as.numeric(distance),
+  stringsAsFactors = FALSE
+)
+
+# Extract box size from file name
+plot_df$box <- sub(
+  "^prep_1J3K_(10|15|20|25|30|40|50|60|70)_[0-9]+\\.pdbqt$",
+  "\\1",
+  plot_df$file
+)
+
+# Extract seed from file name
+plot_df$seed <- as.numeric(
+  sub(
+    "^prep_1J3K_(10|15|20|25|30|40|50|60|70)_([0-9]+)\\.pdbqt$",
+    "\\2",
+    plot_df$file
+  )
+)
+
+# Arrange box size order
+plot_df$box <- factor(
+  plot_df$box,
+  levels = c("10", "15", "20", "25", "30", "40", "50", "60", "70")
+)
+
+# Arrange by box and seed
+plot_df <- plot_df[order(plot_df$box, plot_df$seed), ]
+
+# Extract top-pose Vina free energy from each PDBQT file
+extract_vina_energy <- function(pdbqt_file) {
+
+  lines <- readLines(pdbqt_file, warn = FALSE)
+
+  vina_line <- grep(
+    "^REMARK VINA RESULT:",
+    lines,
+    value = TRUE
+  )
+
+  if (length(vina_line) == 0) {
+    return(NA_real_)
+  }
+
+  # Extract only the binding affinity value
+  as.numeric(
+    sub(
+      "^REMARK VINA RESULT:[[:space:]]*([-0-9.]+).*",
+      "\\1",
+      vina_line[1]
+    )
+  )
+}
+
+# Extract free energy for every docking file
+energy_named <- vapply(
+  myfiles,
+  extract_vina_energy,
+  numeric(1)
+)
+
+# Match energies to the correct file names
+names(energy_named) <- basename(myfiles)
+
+plot_df$free_energy <- as.numeric(
+  energy_named[plot_df$file]
+)
+
+print(head(plot_df))
+
+print(range(plot_df$free_energy, na.rm = TRUE))
+
+# Print calculated distances and free energy
+print(
+  plot_df[, c(
+    "file",
+    "box",
+    "seed",
+    "distance",
+    "free_energy"
+  )]
+)
+
+# Summary statistics: mean, median, SD, min, max
+summary_stats <- aggregate(
+  distance ~ box,
+  data = plot_df,
+  function(x) c(
+    Mean = mean(x),
+    Median = median(x),
+    SD = sd(x),
+    Min = min(x),
+    Max = max(x)
+  )
+)
+
+print(summary_stats)
+
+# Create distance list by grid box
+dist_list <- split(
+  plot_df$distance,
+  plot_df$box,
+  drop = TRUE
+)
+
+# Boxplot
+boxplot(
+  dist_list,
+  xlab = "Grid Box Size",
+  ylab = "Docking Distance (Å)",
+  main = "Docking Distance by Grid Box Size\nExhaustiveness = 12",
+  col = "white",
+  border = "black"
+)
+```
+
+```{r beeswarm_boxplot, fig.width=8, fig.height=6}
+
+if (!requireNamespace("beeswarm", quietly = TRUE)) {
+  stop("Install the beeswarm package first by running: install.packages('beeswarm')")
+}
+
+# Use the existing plot_df created in the runall chunk
+# This preserves file, box, seed, distance and free_energy
+
+dist_list <- split(
+  plot_df$distance,
+  plot_df$box,
+  drop = TRUE
+)
+
+boxplot(
+  dist_list,
+  xlab = "Grid box size",
+  ylab = "Docking distance (Å)",
+  main = "Docking Distance by Grid Box Size\nExhaustiveness = 12",
+  col = "white",
+  border = "black"
+)
+
+beeswarm::beeswarm(
+  dist_list,
+  add = TRUE,
+  pch = 19,
+  cex = 1,
+  col = "darkgray"
+)
+
+```
+
+
+
+```{r free_energy_vs_distance, fig.width=8, fig.height=6}
+
+# Confirm that free energy is available
+if (!"free_energy" %in% names(plot_df)) {
+  stop("The free_energy column is missing from plot_df")
+}
+
+# Keep only complete results
+scatter_df <- plot_df[
+  complete.cases(plot_df$distance, plot_df$free_energy),
+]
+
+if (nrow(scatter_df) == 0) {
+  stop("No complete distance and free-energy values were found")
+}
+
+# Scatter plot
+plot(
+  scatter_df$distance,
+  scatter_df$free_energy,
+  pch = 19,
+  xlab = "Docking distance (Å)",
+  ylab = "Vina predicted binding affinity (kcal/mol)",
+  main = "Docking Distance vs Vina Binding Affinity"
+)
+
+# Linear regression line
+fit <- lm(
+  free_energy ~ distance,
+  data = scatter_df
+)
+
+abline(
+  fit,
+  lwd = 2
+)
+
+# Pearson correlation
+cor_value <- cor(
+  scatter_df$distance,
+  scatter_df$free_energy,
+  method = "pearson"
+)
+
+legend(
+  "topright",
+  legend = paste0(
+    "Pearson r = ",
+    round(cor_value, 3)
+  ),
+  bty = "n"
+)
+
+```
+
+
+
+## Session info
+
+For reproducibility.
+
+```{r,session}
+
+sessionInfo()
+
+```
