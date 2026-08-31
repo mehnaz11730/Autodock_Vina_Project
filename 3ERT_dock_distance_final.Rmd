@@ -1,0 +1,442 @@
+---
+title: "Calculate distance between AutoDock Vina ligand distance and crystal structure"
+author: "Mehnaz Meem"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    fig_width: 5
+    fig_height: 5
+theme: cosmo
+---
+
+Source: TBA
+
+## Introduction
+
+This analysis calculates the distance between the centre of the top-ranked
+AutoDock Vina ligand pose and the crystal-ligand centre for 3ERT. It also
+compares docking distance with Vina predicted binding affinity.
+
+## Crystal structure position
+
+```{r crystal}
+cx <- 30.282
+cy <- -1.913
+cz <- 24.2065
+
+cxyz <- c(cx, cy, cz)
+```
+
+## Read example data
+
+```{r autodock_data}
+pdb <- readLines(
+  "~/Protein_Comparison_workflows/prep_3ERT_10_200.pdbqt",
+  warn = FALSE
+)
+
+# Keep only the top-ranked Vina pose (MODEL 1)
+model_start <- grep("^MODEL[[:space:]]+1[[:space:]]*$", pdb)[1]
+
+if (!is.na(model_start)) {
+  model_end <- which(
+    seq_along(pdb) > model_start & grepl("^ENDMDL", pdb)
+  )[1]
+
+  if (is.na(model_end)) {
+    stop("MODEL 1 has no ENDMDL in the example PDBQT file")
+  }
+
+  pdb <- pdb[model_start:model_end]
+}
+
+atoms <- pdb[grep("^(ATOM|HETATM)", pdb)]
+
+if (length(atoms) == 0) {
+  stop("No ATOM or HETATM lines found in the example PDBQT file")
+}
+```
+
+Extract the x, y and z coordinates from their fixed PDBQT positions.
+
+```{r extract_coords}
+x <- as.numeric(substr(atoms, 31, 38))
+y <- as.numeric(substr(atoms, 39, 46))
+z <- as.numeric(substr(atoms, 47, 54))
+
+if (anyNA(c(x, y, z))) {
+  stop("Could not read coordinates from the example PDBQT file")
+}
+
+mx <- cbind(x = x, y = y, z = z)
+
+str(mx)
+summary(mx)
+```
+
+## Predicted ligand centre and distance
+
+```{r example_distance}
+px <- mean(range(mx[, "x"]))
+py <- mean(range(mx[, "y"]))
+pz <- mean(range(mx[, "z"]))
+
+dx <- abs(cx - px)
+dy <- abs(cy - py)
+dz <- abs(cz - pz)
+
+hyp <- sqrt(dx^2 + dy^2 + dz^2)
+hyp
+```
+
+## Define distance function
+
+```{r dist_function}
+model_ligand_dist <- function(cxyz, pdbqt_file) {
+  pdb <- readLines(pdbqt_file, warn = FALSE)
+
+  # Keep only the top-ranked Vina pose (MODEL 1)
+  model_start <- grep("^MODEL[[:space:]]+1[[:space:]]*$", pdb)[1]
+
+  if (!is.na(model_start)) {
+    model_end <- which(
+      seq_along(pdb) > model_start & grepl("^ENDMDL", pdb)
+    )[1]
+
+    if (is.na(model_end)) {
+      stop(paste("MODEL 1 has no ENDMDL in:", pdbqt_file))
+    }
+
+    pdb <- pdb[model_start:model_end]
+  }
+
+  atoms <- pdb[grep("^(ATOM|HETATM)", pdb)]
+
+  if (length(atoms) == 0) {
+    stop(paste("No ATOM or HETATM lines found in:", pdbqt_file))
+  }
+
+  # Read coordinates from fixed-width PDBQT columns
+  x <- as.numeric(substr(atoms, 31, 38))
+  y <- as.numeric(substr(atoms, 39, 46))
+  z <- as.numeric(substr(atoms, 47, 54))
+
+  if (anyNA(c(x, y, z))) {
+    stop(paste("Could not read coordinates from:", pdbqt_file))
+  }
+
+  predicted_centre <- c(
+    mean(range(x)),
+    mean(range(y)),
+    mean(range(z))
+  )
+
+  sqrt(sum((cxyz - predicted_centre)^2))
+}
+```
+
+Test the function.
+
+```{r functest}
+model_ligand_dist(
+  cxyz,
+  "~/Protein_Comparison_workflows/prep_3ERT_10_200.pdbqt"
+)
+```
+
+## Run for all PDBQT files
+
+```{r runall}
+workdir <- "~/Protein_Comparison_workflows"
+box_pattern <- "10|15|20|25|30|40|50|60|70|80|90|100"
+
+myfiles <- list.files(
+  path = workdir,
+  pattern = paste0(
+    "^prep_3ERT_(",
+    box_pattern,
+    ")_[0-9]+\\.pdbqt$"
+  ),
+  full.names = TRUE
+)
+
+if (length(myfiles) == 0) {
+  stop("No 3ERT docking files found in ~/Protein_Comparison_workflows")
+}
+
+distance <- vapply(
+  myfiles,
+  function(f) model_ligand_dist(cxyz, f),
+  numeric(1)
+)
+
+plot_df <- data.frame(
+  file = basename(myfiles),
+  distance = as.numeric(distance),
+  stringsAsFactors = FALSE
+)
+
+plot_df$box <- sub(
+  paste0(
+    "^prep_3ERT_(",
+    box_pattern,
+    ")_[0-9]+\\.pdbqt$"
+  ),
+  "\\1",
+  plot_df$file
+)
+
+plot_df$seed <- as.numeric(
+  sub(
+    paste0(
+      "^prep_3ERT_(?:",
+      box_pattern,
+      ")_([0-9]+)\\.pdbqt$"
+    ),
+    "\\1",
+    plot_df$file,
+    perl = TRUE
+  )
+)
+
+plot_df$box <- factor(
+  plot_df$box,
+  levels = c(
+    "10", "15", "20", "25", "30", "40", "50",
+    "60", "70", "80", "90", "100"
+  )
+)
+
+plot_df <- plot_df[order(plot_df$box, plot_df$seed), ]
+```
+
+## Extract Vina predicted binding affinity
+
+```{r vina_energy}
+extract_vina_energy <- function(pdbqt_file) {
+  lines <- readLines(pdbqt_file, warn = FALSE)
+
+  vina_line <- grep(
+    "^REMARK VINA RESULT:",
+    lines,
+    value = TRUE
+  )
+
+  if (length(vina_line) == 0) {
+    return(NA_real_)
+  }
+
+  as.numeric(
+    sub(
+      "^REMARK VINA RESULT:[[:space:]]*([-0-9.]+).*",
+      "\\1",
+      vina_line[1]
+    )
+  )
+}
+
+energy_named <- vapply(
+  myfiles,
+  extract_vina_energy,
+  numeric(1)
+)
+
+names(energy_named) <- basename(myfiles)
+plot_df$free_energy <- as.numeric(energy_named[plot_df$file])
+
+print(
+  plot_df[, c("file", "box", "seed", "distance", "free_energy")]
+)
+```
+
+## Summary statistics
+
+```{r summary_statistics}
+summary_stats <- aggregate(
+  distance ~ box,
+  data = plot_df,
+  function(x) c(
+    Mean = mean(x),
+    Median = median(x),
+    SD = sd(x),
+    Min = min(x),
+    Max = max(x)
+  )
+)
+
+print(summary_stats)
+```
+
+##Best binding affinity result from each box
+
+```{r closest_results}
+best_affinity_results <- do.call(
+  rbind,
+  lapply(
+    split(plot_df, plot_df$box, drop = TRUE),
+    function(df) {
+
+      # Remove files where Vina affinity was not extracted
+      df <- df[!is.na(df$free_energy), ]
+
+      if (nrow(df) == 0) {
+        return(NULL)
+      }
+
+      # More negative affinity represents stronger predicted binding
+      df[which.min(df$free_energy), ]
+    }
+  )
+)
+
+if (is.null(best_affinity_results) ||
+    nrow(best_affinity_results) == 0) {
+  stop("No best-affinity results could be selected")
+}
+
+best_affinity_results <- best_affinity_results[
+  order(
+    as.numeric(
+      as.character(best_affinity_results$box)
+    )
+  ),
+]
+
+rownames(best_affinity_results) <- NULL
+
+print(
+  best_affinity_results[, c(
+    "box",
+    "seed",
+    "free_energy",
+    "distance",
+    "file"
+  )]
+)
+```
+
+## Docking distance by grid box
+
+```{r beeswarm_boxplot, fig.width=8, fig.height=6}
+if (!requireNamespace("beeswarm", quietly = TRUE)) {
+  stop("Install beeswarm first using install.packages('beeswarm')")
+}
+
+dist_list <- split(
+  plot_df$distance,
+  plot_df$box,
+  drop = TRUE
+)
+
+boxplot(
+  dist_list,
+  xlab = "Grid box size (Å)",
+  ylab = "Docking distance (Å)",
+  main = "3ERT Docking Distance by Grid Box Size\nExhaustiveness = 12",
+  col = "white",
+  border = "black"
+)
+
+beeswarm::beeswarm(
+  dist_list,
+  add = TRUE,
+  pch = 19,
+  cex = 0.8,
+  col = "darkgray"
+)
+```
+
+## Vina binding affinity versus distance
+
+```{r best_affinity_vs_distance, fig.width=8, fig.height=6}
+
+scatter_df <- best_affinity_results[
+  complete.cases(
+    best_affinity_results$distance,
+    best_affinity_results$free_energy
+  ),
+]
+
+if (nrow(scatter_df) == 0) {
+  stop(
+    paste(
+      "No complete best-affinity and distance",
+      "values were found"
+    )
+  )
+}
+
+# Colours assigned to each grid-box size
+box_colours <- c(
+  "10" = "purple",
+  "15" = "red",
+  "20" = "blue",
+  "25" = "darkgreen",
+  "30" = "orange",
+  "40" = "brown",
+  "50" = "deeppink",
+  "60" = "cyan4",
+  "70" = "black",
+  "80" = "goldenrod3",
+  "90" = "steelblue",
+  "100" = "magenta4"
+)
+
+point_colours <- box_colours[
+  as.character(scatter_df$box)
+]
+
+plot(
+  scatter_df$distance,
+  scatter_df$free_energy,
+  pch = 19,
+  cex = 1.8,
+  col = point_colours,
+  xlab = "Docking distance (Å)",
+  ylab = "Best Vina binding affinity (kcal/mol)",
+  main = paste(
+    "3ERT Best Binding Affinity",
+    "for Each Grid Box"
+  )
+)
+
+# Add box-size labels beside each point
+text(
+  scatter_df$distance,
+  scatter_df$free_energy,
+  labels = paste0(
+    scatter_df$box,
+    " Å"
+  ),
+  pos = 3,
+  cex = 0.8,
+  col = point_colours
+)
+
+legend(
+  "topright",
+  legend = paste0(
+    levels(droplevels(scatter_df$box)),
+    " Å"
+  ),
+  col = box_colours[
+    levels(droplevels(scatter_df$box))
+  ],
+  pch = 19,
+  pt.cex = 1.3,
+  title = "Grid box size",
+  bty = "n"
+)
+```
+
+
+## Session information
+
+```{r session}
+sessionInfo()
+```
